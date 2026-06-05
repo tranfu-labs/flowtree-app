@@ -1,0 +1,8 @@
+.DS_Store
+node_modules/
+dist/
+.venv/
+.vite-dev.log
+.vite-preview.log
+artifacts-*.png
+assets/design/
