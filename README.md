@@ -20,6 +20,7 @@ https://flowtree-app.tranfu.com/
 
 ```text
 src/data/market-data.json
+public/market-data.json
 ```
 
 ## 本地运行
@@ -61,6 +62,41 @@ npm run data:refresh
 
 - 如果 AKShare 或东方财富接口临时不可用，脚本会保留上一次可用数据，避免页面部署后无法打开。
 - 刷新成功后，重新构建即可把新数据带入静态页面。
+- `src/data/market-data.json` 用于构建时内置数据，`public/market-data.json` 用于页面手动刷新时拉取最新已部署数据。
+
+## 自动刷新
+
+GitHub Actions 会在交易日自动刷新数据并推送到 `main`，随后触发 GitHub Pages 重新部署。
+
+北京时间刷新点：
+
+```text
+09:35
+10:30
+11:30
+14:00
+15:10
+```
+
+对应工作流：
+
+```text
+.github/workflows/refresh-market-data.yml
+```
+
+工作流逻辑：
+
+1. 安装 Node 和 Python 数据依赖。
+2. 执行 `npm run data:refresh`。
+3. 构建验证。
+4. 如果数据有变化，提交 `src/data/market-data.json` 和 `public/market-data.json`。
+5. 推送到 `main` 后自动触发 GitHub Pages 部署。
+
+说明：
+
+- GitHub 的定时任务使用 UTC，本仓库已经换算成北京时间。
+- 当前按周一到周五执行；如果遇到 A 股休市日，脚本会尽量保留已有可用数据。
+- 页面右上角的「刷新」按钮不会直接调用 AKShare，也不会触发 GitHub 写入；它只拉取最新已部署的 `public/market-data.json`，并显示连接、下载、校验、更新进度。
 
 ## 构建
 

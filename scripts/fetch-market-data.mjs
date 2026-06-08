@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outputPath = new URL("../src/data/market-data.json", import.meta.url);
+const runtimeOutputPath = new URL("../public/market-data.json", import.meta.url);
 const execFileAsync = promisify(execFile);
 
 const EASTMONEY_LIST_API = "https://push2.eastmoney.com/api/qt/clist/get";
@@ -705,12 +706,20 @@ async function main() {
     branches
   };
 
-  await mkdir(dirname(fileURLToPath(outputPath)), { recursive: true });
-  await writeFile(outputPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  await writeMarketData(payload);
   console.log(`Wrote ${fileURLToPath(outputPath)} from ${__dirname}`);
+  console.log(`Wrote ${fileURLToPath(runtimeOutputPath)} for runtime refresh`);
   console.log(`Market time: ${payload.meta.marketTime}`);
   console.log(`Data source: ${payload.meta.source}`);
   console.log(`Branches: ${branches.map((branch) => `${branch.name} ${branch.flow}亿`).join(" | ")}`);
+}
+
+async function writeMarketData(payload) {
+  const content = `${JSON.stringify(payload, null, 2)}\n`;
+  await mkdir(dirname(fileURLToPath(outputPath)), { recursive: true });
+  await mkdir(dirname(fileURLToPath(runtimeOutputPath)), { recursive: true });
+  await writeFile(outputPath, content, "utf8");
+  await writeFile(runtimeOutputPath, content, "utf8");
 }
 
 main().catch(async (error) => {
@@ -718,13 +727,17 @@ main().catch(async (error) => {
   console.warn(`Refresh failed: ${message}`);
   try {
     const cached = JSON.parse(await readFile(outputPath, "utf8"));
+    if (process.env.SKIP_CACHE_FAILURE_WRITE === "1") {
+      console.warn(`Kept cached data from ${cached.meta?.marketTime || "unknown time"} without rewriting files.`);
+      return;
+    }
     cached.meta = {
       ...cached.meta,
       refreshAttemptedAt: new Date().toISOString(),
       refreshStatus: "failed_using_cached_data",
       refreshError: message
     };
-    await writeFile(outputPath, `${JSON.stringify(cached, null, 2)}\n`, "utf8");
+    await writeMarketData(cached);
     console.warn(`Kept cached data from ${cached.meta.marketTime || "unknown time"}.`);
     return;
   } catch (cacheError) {

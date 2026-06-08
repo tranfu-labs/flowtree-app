@@ -233,6 +233,7 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+  justify-content: flex-end;
 }
 
 .top-actions button,
@@ -256,6 +257,21 @@ button {
   padding: 0;
 }
 
+.top-actions .refresh-button {
+  width: auto;
+  min-width: 82px;
+  padding: 0 11px;
+  color: #d7e7e5;
+}
+
+.refresh-button.loading svg {
+  animation: spin 1s linear infinite;
+}
+
+.refresh-button span {
+  font-size: 13px;
+}
+
 .user-chip {
   color: #d7e7e5;
 }
@@ -269,6 +285,57 @@ button {
   gap: 18px;
   border-bottom: 1px solid var(--line-dark);
   color: #d2e6e2;
+}
+
+.refresh-feedback {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(160px, 320px);
+  gap: 16px;
+  align-items: center;
+  padding: 8px 22px;
+  border-bottom: 1px solid var(--line-dark);
+  background: rgba(255, 255, 255, 0.035);
+  color: #d7e7e5;
+}
+
+.refresh-feedback strong {
+  display: block;
+  font-size: 13px;
+}
+
+.refresh-feedback span {
+  display: block;
+  margin-top: 2px;
+  color: #8fa9a5;
+  font-size: 12px;
+}
+
+.refresh-feedback.success strong {
+  color: var(--green);
+}
+
+.refresh-feedback.error strong {
+  color: #f0b84f;
+}
+
+.refresh-progress {
+  height: 7px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.refresh-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--amber), var(--green));
+  transition: width 180ms ease;
+}
+
+.refresh-feedback.error .refresh-progress i {
+  background: linear-gradient(90deg, var(--amber), var(--red));
 }
 
 .market-item {
@@ -1711,6 +1778,12 @@ td.down {
   }
 }
 
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 1280px) {
   .app-shell {
     grid-template-columns: 74px minmax(0, 1fr);
@@ -1795,6 +1868,11 @@ td.down {
     padding: 16px;
   }
 
+  .top-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
   .market-strip {
     grid-template-columns: repeat(2, 1fr);
     padding: 12px 16px;
@@ -1815,6 +1893,12 @@ td.down {
     overflow-x: auto;
     padding: 10px 16px;
     height: auto;
+  }
+
+  .refresh-feedback {
+    grid-template-columns: 1fr;
+    padding: 9px 16px;
+    gap: 8px;
   }
 
   .tree-layout,

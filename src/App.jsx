@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -20,6 +20,7 @@ import {
   Layers,
   Leaf,
   LineChart,
+  RefreshCw,
   Search,
   Shield,
   SlidersHorizontal,
@@ -29,7 +30,7 @@ import {
   TrendingUp,
   Zap
 } from "lucide-react";
-import marketData from "./data/market-data.json";
+import bundledMarketData from "./data/market-data.json";
 
 const fallbackBranches = [
   {
@@ -191,13 +192,17 @@ const iconMap = {
   finance: BarChart3
 };
 
-const rawBranches = marketData.branches?.length ? marketData.branches : fallbackBranches;
-const branches = rawBranches.map((branch) => ({
-  ...branch,
-  icon: branch.icon || iconMap[branch.iconKey] || GitBranch,
-  lanes: branch.lanes || [],
-  candidates: branch.candidates || []
-}));
+const AUTO_REFRESH_LABEL = "交易日 09:35 / 10:30 / 11:30 / 14:00 / 15:10";
+
+function buildDisplayBranches(data) {
+  const rawBranches = data?.branches?.length ? data.branches : fallbackBranches;
+  return rawBranches.map((branch) => ({
+    ...branch,
+    icon: branch.icon || iconMap[branch.iconKey] || GitBranch,
+    lanes: branch.lanes || [],
+    candidates: branch.candidates || []
+  }));
+}
 
 function formatFlow(value) {
   const sign = value > 0 ? "+" : "";
@@ -245,7 +250,94 @@ function round(value, digits = 2) {
   return Math.round((Number(value) || 0) * factor) / factor;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function runtimeDataUrl() {
+  const base = import.meta.env.BASE_URL || "/";
+  return `${base}${base.endsWith("/") ? "" : "/"}market-data.json`;
+}
+
+function isValidMarketData(data) {
+  return Boolean(data?.meta && Array.isArray(data?.branches) && data.branches.length);
+}
+
+function useRuntimeMarketData() {
+  const [data, setData] = useState(bundledMarketData);
+  const [refreshState, setRefreshState] = useState({
+    status: "idle",
+    progress: 0,
+    message: "等待刷新",
+    detail: AUTO_REFRESH_LABEL
+  });
+
+  const refreshMarketData = useCallback(async () => {
+    if (refreshState.status === "loading") return;
+    const previousGeneratedAt = data?.meta?.generatedAt || "";
+
+    try {
+      setRefreshState({
+        status: "loading",
+        progress: 18,
+        message: "正在连接数据源",
+        detail: "准备拉取最新市场数据文件"
+      });
+      await sleep(140);
+
+      setRefreshState({
+        status: "loading",
+        progress: 45,
+        message: "正在下载最新数据",
+        detail: "读取已部署的 market-data.json"
+      });
+      const response = await fetch(`${runtimeDataUrl()}?t=${Date.now()}`, {
+        cache: "no-store",
+        headers: {
+          "Cache-Control": "no-cache"
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`数据文件读取失败：${response.status}`);
+      }
+      const nextData = await response.json();
+
+      setRefreshState({
+        status: "loading",
+        progress: 72,
+        message: "正在校验数据",
+        detail: "检查分支、赛道和候选池"
+      });
+      await sleep(120);
+      if (!isValidMarketData(nextData)) {
+        throw new Error("数据格式不完整");
+      }
+
+      setData(nextData);
+      const nextGeneratedAt = nextData?.meta?.generatedAt || "";
+      const unchanged = previousGeneratedAt && previousGeneratedAt === nextGeneratedAt;
+      setRefreshState({
+        status: "success",
+        progress: 100,
+        message: unchanged ? "当前已经是最新数据" : "刷新完成",
+        detail: `数据时间：${nextData.meta.marketTime || "待确认"}`
+      });
+    } catch (error) {
+      setRefreshState({
+        status: "error",
+        progress: 100,
+        message: "刷新失败",
+        detail: error?.message || "请稍后重试"
+      });
+    }
+  }, [data, refreshState.status]);
+
+  return { marketData: data, refreshState, refreshMarketData };
+}
+
 function App() {
+  const { marketData, refreshState, refreshMarketData } = useRuntimeMarketData();
+  const branches = useMemo(() => buildDisplayBranches(marketData), [marketData]);
   const [page, setPage] = useState("tree");
   const [activeBranchId, setActiveBranchId] = useState(branches[0]?.id || "ai");
   const [activeLane, setActiveLane] = useState("");
@@ -288,8 +380,9 @@ function App() {
     <div className="app-shell">
       <Sidebar page={page} setPage={setPage} meta={marketData.meta} />
       <main className="workspace">
-        <Topbar query={query} setQuery={setQuery} meta={marketData.meta} />
+        <Topbar query={query} setQuery={setQuery} meta={marketData.meta} refreshState={refreshState} onRefresh={refreshMarketData} />
         <MarketStrip indexes={marketData.indexes || []} branches={branches} meta={marketData.meta} topSectors={marketData.topSectors || []} />
+        <RefreshFeedback state={refreshState} />
         <div className="page-tabs">
           {pages.map((item) => {
             const Icon = item.icon;
@@ -315,6 +408,7 @@ function App() {
         )}
         {page === "branch" && (
           <BranchPage
+            branches={branches}
             activeBranch={activeBranch}
             selectedLane={selectedLane}
             onSelectBranch={selectBranch}
@@ -373,6 +467,7 @@ function Sidebar({ page, setPage, meta }) {
         <p>真实资金流驱动候选池；页面仅作研究参考，不构成投资建议。</p>
         <small className={dataStatus.cached ? "status-warning" : ""}>{dataStatus.label}</small>
         <small>更新：{meta?.marketTime || "待刷新"}</small>
+        <small>自动：{AUTO_REFRESH_LABEL}</small>
       </div>
       <div className="side-foot">
         <button>
@@ -384,8 +479,9 @@ function Sidebar({ page, setPage, meta }) {
   );
 }
 
-function Topbar({ query, setQuery, meta }) {
+function Topbar({ query, setQuery, meta, refreshState, onRefresh }) {
   const dataStatus = getDataStatus(meta);
+  const loading = refreshState.status === "loading";
   return (
     <header className="topbar">
       <div>
@@ -397,6 +493,10 @@ function Topbar({ query, setQuery, meta }) {
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索政策 / 行业 / 赛道 / 个股" />
       </label>
       <div className="top-actions">
+        <button className={loading ? "refresh-button loading" : "refresh-button"} onClick={onRefresh} disabled={loading} title="刷新最新数据">
+          <RefreshCw size={18} />
+          <span>{loading ? `${refreshState.progress}%` : "刷新"}</span>
+        </button>
         <button title="导出当前页面">
           <Download size={18} />
         </button>
@@ -409,6 +509,21 @@ function Topbar({ query, setQuery, meta }) {
         </button>
       </div>
     </header>
+  );
+}
+
+function RefreshFeedback({ state }) {
+  if (state.status === "idle") return null;
+  return (
+    <section className={`refresh-feedback ${state.status}`}>
+      <div>
+        <strong>{state.message}</strong>
+        <span>{state.detail}</span>
+      </div>
+      <div className="refresh-progress">
+        <i style={{ width: `${state.progress}%` }} />
+      </div>
+    </section>
   );
 }
 
@@ -579,7 +694,7 @@ function TreePage({ branches, activeBranch, selectedLane, onSelectBranch, onSele
   const totalFlow = branches.reduce((sum, branch) => sum + branch.flow, 0);
   return (
     <section className="tree-layout">
-      <PolicyLadder activeBranch={activeBranch} onSelectBranch={onSelectBranch} />
+      <PolicyLadder branches={branches} activeBranch={activeBranch} onSelectBranch={onSelectBranch} />
       <div className="tree-canvas-panel">
         <div className="panel-head">
           <div>
@@ -601,7 +716,7 @@ function TreePage({ branches, activeBranch, selectedLane, onSelectBranch, onSele
   );
 }
 
-function PolicyLadder({ activeBranch, onSelectBranch }) {
+function PolicyLadder({ branches, activeBranch, onSelectBranch }) {
   const ladder = [
     { title: "十五五规划", body: "现代化产业体系 / 科技自立自强 / 数字中国 / 绿色转型 / 安全底线" },
     { title: "中观维度", body: "资金方向、产业景气、供给瓶颈、政策催化、市场关注度" },
@@ -838,7 +953,7 @@ function FactorRow({ label, value }) {
   );
 }
 
-function BranchPage({ activeBranch, selectedLane, onSelectBranch, onSelectLane }) {
+function BranchPage({ branches, activeBranch, selectedLane, onSelectBranch, onSelectLane }) {
   const columns = useMemo(() => {
     const branchFlow = Math.abs(activeBranch.flow || 0);
     const laneFlow = Math.abs(selectedLane.flow || 0);

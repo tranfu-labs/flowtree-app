@@ -1,0 +1,68 @@
+name: Refresh Market Data
+
+on:
+  schedule:
+    # Asia/Shanghai trading-day refresh points:
+    # 09:35, 10:30, 11:30, 14:00, 15:10
+    - cron: "35 1 * * 1-5"
+    - cron: "30 2 * * 1-5"
+    - cron: "30 3 * * 1-5"
+    - cron: "0 6 * * 1-5"
+    - cron: "10 7 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: market-data-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh and commit market data
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install data dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Refresh market data
+        run: npm run data:refresh
+        env:
+          SKIP_CACHE_FAILURE_WRITE: "1"
+
+      - name: Verify build
+        run: npm run build
+
+      - name: Commit refreshed data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/data/market-data.json public/market-data.json
+          if git diff --cached --quiet; then
+            echo "No market data changes to commit."
+          else
+            git commit -m "Refresh market data"
+            git push
+          fi
