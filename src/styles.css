@@ -49,13 +49,17 @@ button {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr);
+  align-items: start;
   background:
     radial-gradient(circle at 42% 0%, rgba(54, 191, 163, 0.08), transparent 33%),
     var(--graphite-950);
 }
 
 .sidebar {
-  min-height: 100vh;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  max-height: 100vh;
   color: #dcebe9;
   background:
     linear-gradient(180deg, rgba(14, 26, 33, 0.96), rgba(8, 16, 21, 0.98)),
@@ -65,6 +69,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  overflow-y: auto;
 }
 
 .brand {
@@ -1848,7 +1853,11 @@ td.down {
   }
 
   .sidebar {
+    position: static;
+    height: auto;
+    max-height: none;
     min-height: auto;
+    overflow: visible;
     padding: 12px;
   }
 
