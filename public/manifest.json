@@ -9,12 +9,12 @@
   "theme_color": "#12332d",
   "icons": [
     {
-      "src": "https://flowtree-app.tranfu.com/icon-192x192-20260608.png",
+      "src": "/icon-192x192-20260608.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "https://flowtree-app.tranfu.com/icon-512x512-20260608.png",
+      "src": "/icon-512x512-20260608.png",
       "sizes": "512x512",
       "type": "image/png"
     }
