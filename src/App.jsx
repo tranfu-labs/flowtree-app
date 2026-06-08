@@ -443,7 +443,7 @@ function Sidebar({ page, setPage, meta }) {
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-mark">
-          <GitBranch size={21} />
+          <img src="/icon-192x192-20260608.png" alt="" />
         </div>
         <div>
           <strong>TranFu量化</strong>

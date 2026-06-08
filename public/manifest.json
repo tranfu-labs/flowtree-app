@@ -1,0 +1,22 @@
+{
+  "name": "TranFu量化 / FlowTree",
+  "short_name": "FlowTree",
+  "description": "从十五五政策叙事到资金流分支，再到个股候选的量化研究工作台。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#091218",
+  "theme_color": "#12332d",
+  "icons": [
+    {
+      "src": "https://flowtree-app.tranfu.com/icon-192x192-20260608.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://flowtree-app.tranfu.com/icon-512x512-20260608.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

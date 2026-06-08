@@ -81,7 +81,14 @@ button {
   place-items: center;
   border-radius: 8px;
   color: #091317;
-  background: linear-gradient(135deg, #f8fff9, #66ddb3);
+  background: #0d2026;
+  overflow: hidden;
+}
+
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .brand strong {
