@@ -1,5 +1,6 @@
-const EASTMONEY_LIST_API = "https://push2.eastmoney.com/api/qt/clist/get";
-const EASTMONEY_INDEX_API = "https://push2.eastmoney.com/api/qt/ulist.np/get";
+const EASTMONEY_ORIGIN = "https://push2.eastmoney.com";
+const EASTMONEY_LIST_PATH = "/qt/clist/get";
+const EASTMONEY_INDEX_PATH = "/qt/ulist.np/get";
 
 const sectorFields = [
   "f12",
@@ -263,8 +264,16 @@ async function fetchJson(url) {
   throw lastError;
 }
 
-function buildListUrl(params) {
-  const url = new URL(EASTMONEY_LIST_API);
+function shouldUseEastmoneyProxy() {
+  return !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+function buildEastmoneyUrl(path, params = {}) {
+  const base = shouldUseEastmoneyProxy()
+    ? `${window.location.origin}/api/eastmoney${path}`
+    : `${EASTMONEY_ORIGIN}/api${path}`;
+  const url = new URL(base);
+  url.searchParams.set("ut", "bd1d9ddb04089700cf9c27f6f7426281");
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }
@@ -272,12 +281,12 @@ function buildListUrl(params) {
 }
 
 async function fetchIndexes() {
-  const url = new URL(EASTMONEY_INDEX_API);
-  url.searchParams.set("fltt", "2");
-  url.searchParams.set("invt", "2");
-  url.searchParams.set("fields", "f12,f13,f14,f2,f3,f4,f6");
-  url.searchParams.set("secids", "1.000001,0.399001,0.399006,1.000300");
-  const data = await fetchJson(url.toString());
+  const data = await fetchJson(buildEastmoneyUrl(EASTMONEY_INDEX_PATH, {
+    fltt: "2",
+    invt: "2",
+    fields: "f12,f13,f14,f2,f3,f4,f6",
+    secids: "1.000001,0.399001,0.399006,1.000300"
+  }));
   return (data.data?.diff || []).map((item) => ({
     code: `${item.f12}.${marketSuffix(item.f13)}`,
     name: item.f14,
@@ -288,7 +297,7 @@ async function fetchIndexes() {
 }
 
 async function fetchSectorUniverse(type) {
-  const url = buildListUrl({
+  const url = buildEastmoneyUrl(EASTMONEY_LIST_PATH, {
     pn: "1",
     pz: "700",
     po: "1",
@@ -320,7 +329,7 @@ async function fetchSectorUniverse(type) {
 }
 
 async function fetchSectorStocks(sectorCode, limit = 8) {
-  const url = buildListUrl({
+  const url = buildEastmoneyUrl(EASTMONEY_LIST_PATH, {
     pn: "1",
     pz: String(limit),
     po: "1",
