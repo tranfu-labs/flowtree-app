@@ -27,7 +27,7 @@ import {
   Target
 } from "lucide-react";
 import bundledMarketData from "./data/market-data.json";
-import { dueScheduledRefreshKey, fetchLiveMarketData, shouldRefreshOnOpen } from "./live-market-data.js";
+import { fetchLiveMarketData } from "./live-market-data.js";
 
 const fallbackBranches = [
   {
@@ -430,7 +430,6 @@ function useRuntimeMarketData() {
 
   useEffect(() => {
     let cancelled = false;
-    let refreshTimer;
     async function loadGlobalData() {
       try {
         setRefreshState({
@@ -448,9 +447,6 @@ function useRuntimeMarketData() {
           message: "已读取官网数据",
           detail: `数据时间：${globalData.meta?.marketTime || "待确认"}`
         });
-        if (shouldRefreshOnOpen(globalData.meta)) {
-          refreshTimer = window.setTimeout(() => refreshMarketData({ reason: "open" }), 400);
-        }
       } catch {
         if (cancelled) return;
         setRefreshState({
@@ -459,33 +455,13 @@ function useRuntimeMarketData() {
           message: "等待刷新",
           detail: AUTO_REFRESH_LABEL
         });
-        if (shouldRefreshOnOpen(dataRef.current.meta)) {
-          refreshTimer = window.setTimeout(() => refreshMarketData({ reason: "open" }), 400);
-        }
       }
     }
     loadGlobalData();
     return () => {
       cancelled = true;
-      window.clearTimeout(refreshTimer);
     };
-  }, [applyMarketData, refreshMarketData]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      if (loadingRef.current) return;
-      const key = dueScheduledRefreshKey();
-      if (!key) return;
-      try {
-        if (window.localStorage.getItem(key) === "1") return;
-        window.localStorage.setItem(key, "1");
-      } catch {
-        // localStorage may be unavailable in private windows; the refresh can still run.
-      }
-      refreshMarketData({ reason: "schedule" });
-    }, 30000);
-    return () => window.clearInterval(timer);
-  }, [refreshMarketData]);
+  }, [applyMarketData]);
 
   return { marketData: data, refreshState, refreshMarketData };
 }

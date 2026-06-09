@@ -1,8 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { setDefaultResultOrder } from "node:dns";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+
+setDefaultResultOrder("ipv4first");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outputPath = new URL("../src/data/market-data.json", import.meta.url);
@@ -357,8 +360,11 @@ function formatDateTime(timestampSeconds) {
 async function fetchJson(url) {
   let lastError;
   for (let attempt = 0; attempt < 4; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Number(process.env.EASTMONEY_TIMEOUT_MS || 20000));
     try {
       const response = await fetch(url, {
+        signal: controller.signal,
         headers: {
           "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
           Referer: "https://data.eastmoney.com/"
@@ -373,11 +379,30 @@ async function fetchJson(url) {
       }
       return data;
     } catch (error) {
-      lastError = error;
+      lastError = new Error(describeRequestError(error, url));
       await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+    } finally {
+      clearTimeout(timeout);
     }
   }
   throw lastError;
+}
+
+function describeRequestError(error, url) {
+  const parsed = new URL(url);
+  const cause = error?.cause;
+  const details = [
+    error?.name || "Error",
+    error?.message || String(error),
+    `host=${parsed.host}`,
+    `path=${parsed.pathname}`
+  ];
+  if (cause?.code) details.push(`causeCode=${cause.code}`);
+  if (cause?.message) details.push(`causeMessage=${cause.message}`);
+  if (cause?.address) details.push(`address=${cause.address}`);
+  if (cause?.port) details.push(`port=${cause.port}`);
+  if (cause?.syscall) details.push(`syscall=${cause.syscall}`);
+  return details.join(" | ");
 }
 
 function buildListUrl(params) {

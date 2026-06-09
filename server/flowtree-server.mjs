@@ -1,9 +1,13 @@
 import { spawn } from "node:child_process";
+import { setDefaultResultOrder } from "node:dns";
+import { lookup } from "node:dns/promises";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+setDefaultResultOrder("ipv4first");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(__dirname, "..");
@@ -118,6 +122,32 @@ function sendText(response, text, statusCode = 500) {
   response.end(text);
 }
 
+function trimLines(text, maxLines = 12) {
+  return String(text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-maxLines)
+    .join("\n");
+}
+
+function describeFetchError(error, url) {
+  const parsed = new URL(url);
+  const cause = error?.cause;
+  const details = {
+    name: error?.name || "Error",
+    message: error?.message || String(error),
+    host: parsed.host,
+    path: parsed.pathname
+  };
+  if (cause?.code) details.causeCode = cause.code;
+  if (cause?.message) details.causeMessage = cause.message;
+  if (cause?.address) details.address = cause.address;
+  if (cause?.port) details.port = cause.port;
+  if (cause?.syscall) details.syscall = cause.syscall;
+  return details;
+}
+
 function runRefreshScript() {
   return new Promise((resolveScript, rejectScript) => {
     const child = spawn(process.execPath, [refreshScriptPath], {
@@ -147,8 +177,7 @@ function runRefreshScript() {
         return;
       }
       if (/Refresh failed:|Kept cached data/i.test(output)) {
-        const failedLine = output.split("\n").find((line) => /Refresh failed:|Kept cached data/i.test(line));
-        rejectScript(new Error(failedLine || "Refresh script kept cached data."));
+        rejectScript(new Error(trimLines(output) || "Refresh script kept cached data."));
         return;
       }
       resolveScript(output);
@@ -296,8 +325,62 @@ async function proxyEastmoney(request, response, url) {
     });
     response.end(Buffer.from(body));
   } catch (error) {
-    sendText(response, error?.message || String(error), 502);
+    sendJson(response, describeFetchError(error, upstream), 502);
   }
+}
+
+async function runMarketDataDiagnostics() {
+  const startedAt = new Date().toISOString();
+  const listUrl = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&po=1&np=1&fltt=2&invt=2&fid=f62&fs=m:90+t:2&fields=f12,f14,f62";
+  const indexUrl = "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&fields=f12,f13,f14,f2,f3&secids=1.000001";
+  const diagnostics = {
+    startedAt,
+    dnsOrder: "ipv4first",
+    dns: null,
+    checks: []
+  };
+
+  try {
+    diagnostics.dns = await lookup("push2.eastmoney.com", { all: true });
+  } catch (error) {
+    diagnostics.dns = describeFetchError(error, "https://push2.eastmoney.com/");
+  }
+
+  for (const [label, target] of [["sector-list", listUrl], ["index-list", indexUrl]]) {
+    const checkStarted = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(target, {
+        signal: controller.signal,
+        headers: {
+          Referer: "https://data.eastmoney.com/",
+          "User-Agent": "Mozilla/5.0"
+        }
+      });
+      const contentType = response.headers.get("content-type") || "";
+      const text = await response.text();
+      diagnostics.checks.push({
+        label,
+        ok: response.ok,
+        status: response.status,
+        contentType,
+        durationMs: Date.now() - checkStarted,
+        sample: text.slice(0, 180)
+      });
+    } catch (error) {
+      diagnostics.checks.push({
+        label,
+        ok: false,
+        durationMs: Date.now() - checkStarted,
+        error: describeFetchError(error, target)
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  return diagnostics;
 }
 
 async function serveStatic(request, response, url) {
@@ -365,6 +448,15 @@ async function handleRequest(request, response) {
     }
     const nextData = await refreshGlobalMarketData(url.searchParams.get("reason") || "manual");
     sendJson(response, nextData);
+    return;
+  }
+
+  if (url.pathname === "/api/market-data/diagnostics") {
+    if (request.method !== "GET") {
+      sendText(response, "Method not allowed.", 405);
+      return;
+    }
+    sendJson(response, await runMarketDataDiagnostics());
     return;
   }
 
