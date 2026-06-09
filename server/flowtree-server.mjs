@@ -76,20 +76,25 @@ function withServerMeta(data, patch = {}) {
 }
 
 async function loadInitialMarketData() {
-  let data;
+  const bundledData = await readJson(bundledDataPath);
+  if (!isValidMarketData(bundledData)) {
+    throw new Error("Bundled market data is invalid.");
+  }
+
   try {
-    data = await readJson(runtimeDataPath);
-    if (!isValidMarketData(data)) {
+    const runtimeData = await readJson(runtimeDataPath);
+    if (!isValidMarketData(runtimeData)) {
       throw new Error("Runtime market data is invalid.");
     }
+    if (isMarketDataNotOlder(bundledData, runtimeData)) {
+      await persistMarketData(bundledData);
+      return withServerMeta(bundledData);
+    }
+    return withServerMeta(runtimeData);
   } catch {
-    data = await readJson(bundledDataPath);
-    await persistMarketData(data);
+    await persistMarketData(bundledData);
+    return withServerMeta(bundledData);
   }
-  if (!isValidMarketData(data)) {
-    throw new Error("Initial market data is invalid.");
-  }
-  return withServerMeta(data);
 }
 
 async function persistMarketData(data) {
