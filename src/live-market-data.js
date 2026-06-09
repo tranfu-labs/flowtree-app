@@ -230,7 +230,12 @@ export function shouldRefreshOnOpen(meta, now = new Date()) {
   const current = shanghaiParts(now);
   if (!isTradingWeekday(current.weekday)) return false;
   if (!meta?.dataDate || meta.dataDate !== current.date) return true;
-  return current.minutes >= scheduledRefreshMinutes[0];
+  const expectedMinute = scheduledRefreshMinutes.filter((minute) => current.minutes >= minute).pop();
+  if (!expectedMinute) return false;
+  const marketMinuteMatch = String(meta?.marketTime || "").match(/\s+(\d{2}):(\d{2})/);
+  if (!marketMinuteMatch) return true;
+  const marketMinute = Number(marketMinuteMatch[1]) * 60 + Number(marketMinuteMatch[2]);
+  return marketMinute < expectedMinute;
 }
 
 export function dueScheduledRefreshKey(now = new Date()) {

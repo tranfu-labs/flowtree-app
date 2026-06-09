@@ -6,3 +6,8 @@ services:
     restart: unless-stopped
     expose:
       - "80"
+    volumes:
+      - flowtree-market-data:/app/data
+
+volumes:
+  flowtree-market-data:

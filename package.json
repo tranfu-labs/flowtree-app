@@ -1,13 +1,14 @@
 {
   "name": "flowtree-app",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "data:refresh": "node scripts/fetch-market-data.mjs",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "serve": "node server/flowtree-server.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",

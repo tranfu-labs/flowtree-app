@@ -258,6 +258,9 @@ function normalizeName(value) {
 }
 
 async function fetchAkshareSectors() {
+  if (process.env.DISABLE_AKSHARE === "1") {
+    throw new Error("AKShare disabled for this refresh environment");
+  }
   const pythonPath = new URL("../.venv/bin/python", import.meta.url);
   const scriptPath = new URL("./akshare-provider.py", import.meta.url);
   const cleanEnv = { ...process.env };

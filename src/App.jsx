@@ -224,6 +224,13 @@ function getDataStatus(meta) {
       cached: true
     };
   }
+  if (meta?.servedFrom === "flowtree-global-cache") {
+    return {
+      label: "官网统一数据",
+      detail: "所有访问者读取同一份官网缓存。",
+      cached: false
+    };
+  }
   if (meta?.sourceProvider?.includes("akshare")) {
     return {
       label: "AKShare 已启用",
@@ -259,8 +266,69 @@ function runtimeDataUrl() {
   return `${base}${base.endsWith("/") ? "" : "/"}market-data.json`;
 }
 
+function marketDataApiUrl(path, params = {}) {
+  const url = new URL(path, window.location.origin);
+  url.searchParams.set("t", String(Date.now()));
+  for (const [key, value] of Object.entries(params)) {
+    if (value) url.searchParams.set(key, value);
+  }
+  return url.toString();
+}
+
 function isValidMarketData(data) {
   return Boolean(data?.meta && Array.isArray(data?.branches) && data.branches.length);
+}
+
+function parseMarketTime(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{4})[/-](\d{2})[/-](\d{2})\s+(\d{2}):(\d{2})/);
+  if (!match) return 0;
+  const [, year, month, day, hour, minute] = match;
+  const parsed = Date.parse(`${year}-${month}-${day}T${hour}:${minute}:00+08:00`);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function marketDataFreshness(data) {
+  const generatedAt = Date.parse(data?.meta?.generatedAt || "");
+  const marketTime = parseMarketTime(data?.meta?.marketTime);
+  return Math.max(Number.isFinite(generatedAt) ? generatedAt : 0, marketTime);
+}
+
+function isMarketDataNotOlder(nextData, currentData) {
+  return marketDataFreshness(nextData) >= marketDataFreshness(currentData);
+}
+
+function isLocalDevHost() {
+  return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+async function readMarketDataResponse(response, label) {
+  if (!response.ok) throw new Error(`${label}返回 ${response.status}`);
+  const payload = await response.json();
+  const data = isValidMarketData(payload) ? payload : payload?.data;
+  if (!isValidMarketData(data)) throw new Error(`${label}格式不完整`);
+  return data;
+}
+
+async function fetchGlobalMarketData({ refresh = false, reason = "" } = {}) {
+  const response = await fetch(marketDataApiUrl(refresh ? "/api/market-data/refresh" : "/api/market-data", { reason }), {
+    method: refresh ? "POST" : "GET",
+    cache: "no-store",
+    headers: {
+      "Cache-Control": "no-cache"
+    }
+  });
+  return readMarketDataResponse(response, refresh ? "官网刷新接口" : "官网数据接口");
+}
+
+async function fetchDeployedMarketData() {
+  const response = await fetch(`${runtimeDataUrl()}?t=${Date.now()}`, {
+    cache: "no-store",
+    headers: {
+      "Cache-Control": "no-cache"
+    }
+  });
+  return readMarketDataResponse(response, "部署数据");
 }
 
 function showBrowserNotification(title, body) {
@@ -274,6 +342,8 @@ function showBrowserNotification(title, body) {
 
 function useRuntimeMarketData() {
   const [data, setData] = useState(bundledMarketData);
+  const dataRef = useRef(bundledMarketData);
+  const loadingRef = useRef(false);
   const [refreshState, setRefreshState] = useState({
     status: "idle",
     progress: 0,
@@ -281,84 +351,129 @@ function useRuntimeMarketData() {
     detail: AUTO_REFRESH_LABEL
   });
 
-  const refreshMarketData = useCallback(async (options = {}) => {
-    if (refreshState.status === "loading") return;
-    const previousGeneratedAt = data?.meta?.generatedAt || "";
-    const reason = options?.reason || "manual";
+  const applyMarketData = useCallback((nextData) => {
+    if (!isValidMarketData(nextData)) return false;
+    if (!isMarketDataNotOlder(nextData, dataRef.current)) return false;
+    dataRef.current = nextData;
+    setData(nextData);
+    return true;
+  }, []);
 
+  const refreshMarketData = useCallback(async (options = {}) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    const previousGeneratedAt = dataRef.current?.meta?.generatedAt || "";
+    const reason = options?.reason || "manual";
+    let finalState = null;
     try {
       setRefreshState({
         status: "loading",
         progress: 12,
-        message: reason === "schedule" ? "正在自动更新" : "正在刷新实时行情",
-        detail: "连接公开行情接口"
+        message: reason === "schedule" ? "正在自动更新" : "正在刷新官网数据",
+        detail: "连接官网统一数据服务"
       });
-      const nextData = await fetchLiveMarketData(data, (nextState) => {
-        setRefreshState({
-          status: "loading",
-          ...nextState
-        });
-      });
-      if (!isValidMarketData(nextData)) {
-        throw new Error("数据格式不完整");
-      }
 
-      setData(nextData);
+      const nextData = await fetchGlobalMarketData({ refresh: true, reason });
+      const applied = applyMarketData(nextData);
       const nextGeneratedAt = nextData?.meta?.generatedAt || "";
       const unchanged = previousGeneratedAt && previousGeneratedAt === nextGeneratedAt;
-      setRefreshState({
-        status: "success",
+      const failedWithCache = nextData?.meta?.refreshStatus === "failed_using_cached_data";
+      finalState = {
+        status: failedWithCache ? "error" : "success",
         progress: 100,
-        message: unchanged ? "当前已经是最新数据" : "刷新完成",
-        detail: `数据时间：${nextData.meta.marketTime || "待确认"}`
-      });
-      if (reason === "schedule") {
+        message: failedWithCache ? "刷新失败，已保留官网数据" : unchanged || !applied ? "当前已经是最新数据" : "刷新完成",
+        detail: `数据时间：${(applied ? nextData : dataRef.current).meta?.marketTime || "待确认"}`
+      };
+      if (reason === "schedule" && !failedWithCache) {
         showBrowserNotification("TranFu量化已自动更新", `数据时间：${nextData.meta.marketTime || "待确认"}`);
       }
     } catch (error) {
+      let appliedFallback = false;
+      try {
+        if (isLocalDevHost()) {
+          const localData = await fetchLiveMarketData(dataRef.current, (nextState) => {
+            setRefreshState({
+              status: "loading",
+              ...nextState
+            });
+          });
+          appliedFallback = applyMarketData(localData);
+        }
+      } catch {
+        // Local direct refresh is only a development fallback.
+      }
+      if (!appliedFallback) {
+        try {
+          setRefreshState({
+            status: "loading",
+            progress: 88,
+            message: "刷新失败，校验兜底数据",
+            detail: "旧数据不会覆盖当前较新数据"
+          });
+          const deployedData = await fetchDeployedMarketData();
+          appliedFallback = applyMarketData(deployedData);
+        } catch {
+          appliedFallback = false;
+        }
+      }
+      finalState = {
+        status: "error",
+        progress: 100,
+        message: appliedFallback ? "刷新失败，已保留可用数据" : "刷新失败，已保留当前数据",
+        detail: appliedFallback ? `数据时间：${dataRef.current.meta?.marketTime || "待确认"}` : error?.message || "请稍后重试"
+      };
+    } finally {
+      loadingRef.current = false;
+      if (finalState) setRefreshState(finalState);
+    }
+  }, [applyMarketData]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let refreshTimer;
+    async function loadGlobalData() {
       try {
         setRefreshState({
           status: "loading",
-          progress: 88,
-          message: "实时行情失败，读取兜底数据",
-          detail: "读取已部署的 market-data.json"
+          progress: 18,
+          message: "正在读取官网数据",
+          detail: "读取所有人共用的最新缓存"
         });
-        const response = await fetch(`${runtimeDataUrl()}?t=${Date.now()}`, {
-          cache: "no-store",
-          headers: {
-            "Cache-Control": "no-cache"
-          }
-        });
-        if (!response.ok) throw new Error(`数据文件读取失败：${response.status}`);
-        const deployedData = await response.json();
-        if (!isValidMarketData(deployedData)) throw new Error("兜底数据格式不完整");
-        setData(deployedData);
+        const globalData = await fetchGlobalMarketData();
+        if (cancelled) return;
+        applyMarketData(globalData);
         setRefreshState({
-          status: "error",
+          status: "success",
           progress: 100,
-          message: "实时刷新失败",
-          detail: `已保留部署数据：${deployedData.meta?.marketTime || "待确认"}`
+          message: "已读取官网数据",
+          detail: `数据时间：${globalData.meta?.marketTime || "待确认"}`
         });
+        if (shouldRefreshOnOpen(globalData.meta)) {
+          refreshTimer = window.setTimeout(() => refreshMarketData({ reason: "open" }), 400);
+        }
       } catch {
+        if (cancelled) return;
         setRefreshState({
-          status: "error",
-          progress: 100,
-          message: "刷新失败",
-          detail: error?.message || "请稍后重试"
+          status: "idle",
+          progress: 0,
+          message: "等待刷新",
+          detail: AUTO_REFRESH_LABEL
         });
+        if (shouldRefreshOnOpen(dataRef.current.meta)) {
+          refreshTimer = window.setTimeout(() => refreshMarketData({ reason: "open" }), 400);
+        }
       }
     }
-  }, [data, refreshState.status]);
-
-  useEffect(() => {
-    if (!shouldRefreshOnOpen(data.meta)) return undefined;
-    const timer = window.setTimeout(() => refreshMarketData({ reason: "open" }), 500);
-    return () => window.clearTimeout(timer);
-  }, []);
+    loadGlobalData();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(refreshTimer);
+    };
+  }, [applyMarketData, refreshMarketData]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      if (refreshState.status === "loading") return;
+      if (loadingRef.current) return;
       const key = dueScheduledRefreshKey();
       if (!key) return;
       try {
@@ -370,7 +485,7 @@ function useRuntimeMarketData() {
       refreshMarketData({ reason: "schedule" });
     }, 30000);
     return () => window.clearInterval(timer);
-  }, [refreshMarketData, refreshState.status]);
+  }, [refreshMarketData]);
 
   return { marketData: data, refreshState, refreshMarketData };
 }
