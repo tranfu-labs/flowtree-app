@@ -16,6 +16,10 @@ const execFileAsync = promisify(execFile);
 
 const EASTMONEY_LIST_API = "http://push2.eastmoney.com/api/qt/clist/get";
 const EASTMONEY_INDEX_API = "http://push2.eastmoney.com/api/qt/ulist.np/get";
+const eastmoneyHosts = (process.env.EASTMONEY_HOSTS || "push2.eastmoney.com,push2delay.eastmoney.com,80.push2.eastmoney.com,81.push2.eastmoney.com,82.push2.eastmoney.com")
+  .split(",")
+  .map((host) => host.trim())
+  .filter(Boolean);
 
 const sectorFields = [
   "f12",
@@ -361,20 +365,35 @@ function formatDateTime(timestampSeconds) {
 
 async function fetchJson(url) {
   let lastError;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      const text = await requestText(url);
-      const data = JSON.parse(text);
-      if (data.rc !== 0) {
-        throw new Error(`Eastmoney returned rc=${data.rc}: ${url}`);
+  for (const candidateUrl of candidateEastmoneyUrls(url)) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const text = await requestText(candidateUrl);
+        const data = JSON.parse(text);
+        if (data.rc !== 0) {
+          throw new Error(`Eastmoney returned rc=${data.rc}: ${candidateUrl}`);
+        }
+        return data;
+      } catch (error) {
+        lastError = new Error(describeRequestError(error, candidateUrl));
+        await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
       }
-      return data;
-    } catch (error) {
-      lastError = new Error(describeRequestError(error, url));
-      await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
     }
   }
   throw lastError;
+}
+
+function candidateEastmoneyUrls(url) {
+  const parsed = new URL(url);
+  if (!parsed.hostname.endsWith("eastmoney.com")) return [url];
+  const urls = [];
+  for (const host of eastmoneyHosts) {
+    const next = new URL(url);
+    next.protocol = "http:";
+    next.host = host;
+    urls.push(next.toString());
+  }
+  return [...new Set(urls)];
 }
 
 function requestText(url) {

@@ -21,6 +21,10 @@ const port = Number(process.env.FLOWTREE_PORT || 80);
 const scheduledRefreshMinutes = [575, 630, 690, 840, 910];
 const scheduledRetryIntervalMs = Number(process.env.FLOWTREE_SCHEDULE_RETRY_INTERVAL_MS || 5 * 60 * 1000);
 const scheduleTickIntervalMs = Number(process.env.FLOWTREE_SCHEDULE_TICK_INTERVAL_MS || 30000);
+const eastmoneyHosts = (process.env.EASTMONEY_HOSTS || "push2.eastmoney.com,push2delay.eastmoney.com,80.push2.eastmoney.com,81.push2.eastmoney.com,82.push2.eastmoney.com")
+  .split(",")
+  .map((host) => host.trim())
+  .filter(Boolean);
 const scheduledAttempts = new Map();
 
 const mimeTypes = {
@@ -356,9 +360,7 @@ async function proxyEastmoney(request, response, url) {
 
 async function runMarketDataDiagnostics() {
   const startedAt = new Date().toISOString();
-  const listHttpUrl = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&po=1&np=1&fltt=2&invt=2&fid=f62&fs=m:90+t:2&fields=f12,f14,f62";
   const listHttpsUrl = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&po=1&np=1&fltt=2&invt=2&fid=f62&fs=m:90+t:2&fields=f12,f14,f62";
-  const indexHttpUrl = "http://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&fields=f12,f13,f14,f2,f3&secids=1.000001";
   const indexHttpsUrl = "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&fields=f12,f13,f14,f2,f3&secids=1.000001";
   const diagnostics = {
     startedAt,
@@ -374,9 +376,7 @@ async function runMarketDataDiagnostics() {
   }
 
   for (const [label, target] of [
-    ["fetch-sector-list-http", listHttpUrl],
     ["fetch-sector-list-https", listHttpsUrl],
-    ["fetch-index-list-http", indexHttpUrl],
     ["fetch-index-list-https", indexHttpsUrl]
   ]) {
     const checkStarted = Date.now();
@@ -412,28 +412,31 @@ async function runMarketDataDiagnostics() {
     }
   }
 
-  for (const [label, target] of [
-    ["core-sector-list-http", listHttpUrl],
-    ["core-index-list-http", indexHttpUrl]
-  ]) {
-    const checkStarted = Date.now();
-    try {
-      const result = await requestUpstreamText(target);
-      diagnostics.checks.push({
-        label,
-        ok: result.status >= 200 && result.status < 300,
-        status: result.status,
-        contentType: result.contentType,
-        durationMs: Date.now() - checkStarted,
-        sample: result.text.slice(0, 180)
-      });
-    } catch (error) {
-      diagnostics.checks.push({
-        label,
-        ok: false,
-        durationMs: Date.now() - checkStarted,
-        error: describeFetchError(error, target)
-      });
+  for (const host of eastmoneyHosts) {
+    for (const [kind, path] of [
+      ["sector-list", "/api/qt/clist/get?pn=1&pz=1&po=1&np=1&fltt=2&invt=2&fid=f62&fs=m:90+t:2&fields=f12,f14,f62"],
+      ["index-list", "/api/qt/ulist.np/get?fltt=2&invt=2&fields=f12,f13,f14,f2,f3&secids=1.000001"]
+    ]) {
+      const target = `http://${host}${path}`;
+      const checkStarted = Date.now();
+      try {
+        const result = await requestUpstreamText(target);
+        diagnostics.checks.push({
+          label: `core-${kind}-${host}`,
+          ok: result.status >= 200 && result.status < 300,
+          status: result.status,
+          contentType: result.contentType,
+          durationMs: Date.now() - checkStarted,
+          sample: result.text.slice(0, 180)
+        });
+      } catch (error) {
+        diagnostics.checks.push({
+          label: `core-${kind}-${host}`,
+          ok: false,
+          durationMs: Date.now() - checkStarted,
+          error: describeFetchError(error, target)
+        });
+      }
     }
   }
 
