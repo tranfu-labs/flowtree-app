@@ -1,9 +1,7 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
-  ArrowDownRight,
-  ArrowUpRight,
   BarChart3,
   Bell,
   Bookmark,
@@ -26,11 +24,10 @@ import {
   SlidersHorizontal,
   Sparkles,
   Star,
-  Target,
-  TrendingUp,
-  Zap
+  Target
 } from "lucide-react";
 import bundledMarketData from "./data/market-data.json";
+import { dueScheduledRefreshKey, fetchLiveMarketData, shouldRefreshOnOpen } from "./live-market-data.js";
 
 const fallbackBranches = [
   {
@@ -234,6 +231,13 @@ function getDataStatus(meta) {
       cached: false
     };
   }
+  if (meta?.sourceProvider?.includes("live")) {
+    return {
+      label: "实时行情已启用",
+      detail: "页面正在直接拉取公开行情。",
+      cached: false
+    };
+  }
   return {
     label: "东方财富兜底模式",
     detail: "当前使用东方财富公开行情。",
@@ -250,10 +254,6 @@ function round(value, digits = 2) {
   return Math.round((Number(value) || 0) * factor) / factor;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function runtimeDataUrl() {
   const base = import.meta.env.BASE_URL || "/";
   return `${base}${base.endsWith("/") ? "" : "/"}market-data.json`;
@@ -261,6 +261,15 @@ function runtimeDataUrl() {
 
 function isValidMarketData(data) {
   return Boolean(data?.meta && Array.isArray(data?.branches) && data.branches.length);
+}
+
+function showBrowserNotification(title, body) {
+  if (!("Notification" in window)) return false;
+  if (Notification.permission === "granted") {
+    new Notification(title, { body });
+    return true;
+  }
+  return false;
 }
 
 function useRuntimeMarketData() {
@@ -272,43 +281,24 @@ function useRuntimeMarketData() {
     detail: AUTO_REFRESH_LABEL
   });
 
-  const refreshMarketData = useCallback(async () => {
+  const refreshMarketData = useCallback(async (options = {}) => {
     if (refreshState.status === "loading") return;
     const previousGeneratedAt = data?.meta?.generatedAt || "";
+    const reason = options?.reason || "manual";
 
     try {
       setRefreshState({
         status: "loading",
-        progress: 18,
-        message: "正在连接数据源",
-        detail: "准备拉取最新市场数据文件"
+        progress: 12,
+        message: reason === "schedule" ? "正在自动更新" : "正在刷新实时行情",
+        detail: "连接公开行情接口"
       });
-      await sleep(140);
-
-      setRefreshState({
-        status: "loading",
-        progress: 45,
-        message: "正在下载最新数据",
-        detail: "读取已部署的 market-data.json"
+      const nextData = await fetchLiveMarketData(data, (nextState) => {
+        setRefreshState({
+          status: "loading",
+          ...nextState
+        });
       });
-      const response = await fetch(`${runtimeDataUrl()}?t=${Date.now()}`, {
-        cache: "no-store",
-        headers: {
-          "Cache-Control": "no-cache"
-        }
-      });
-      if (!response.ok) {
-        throw new Error(`数据文件读取失败：${response.status}`);
-      }
-      const nextData = await response.json();
-
-      setRefreshState({
-        status: "loading",
-        progress: 72,
-        message: "正在校验数据",
-        detail: "检查分支、赛道和候选池"
-      });
-      await sleep(120);
       if (!isValidMarketData(nextData)) {
         throw new Error("数据格式不完整");
       }
@@ -322,15 +312,65 @@ function useRuntimeMarketData() {
         message: unchanged ? "当前已经是最新数据" : "刷新完成",
         detail: `数据时间：${nextData.meta.marketTime || "待确认"}`
       });
+      if (reason === "schedule") {
+        showBrowserNotification("TranFu量化已自动更新", `数据时间：${nextData.meta.marketTime || "待确认"}`);
+      }
     } catch (error) {
-      setRefreshState({
-        status: "error",
-        progress: 100,
-        message: "刷新失败",
-        detail: error?.message || "请稍后重试"
-      });
+      try {
+        setRefreshState({
+          status: "loading",
+          progress: 88,
+          message: "实时行情失败，读取兜底数据",
+          detail: "读取已部署的 market-data.json"
+        });
+        const response = await fetch(`${runtimeDataUrl()}?t=${Date.now()}`, {
+          cache: "no-store",
+          headers: {
+            "Cache-Control": "no-cache"
+          }
+        });
+        if (!response.ok) throw new Error(`数据文件读取失败：${response.status}`);
+        const deployedData = await response.json();
+        if (!isValidMarketData(deployedData)) throw new Error("兜底数据格式不完整");
+        setData(deployedData);
+        setRefreshState({
+          status: "error",
+          progress: 100,
+          message: "实时刷新失败",
+          detail: `已保留部署数据：${deployedData.meta?.marketTime || "待确认"}`
+        });
+      } catch {
+        setRefreshState({
+          status: "error",
+          progress: 100,
+          message: "刷新失败",
+          detail: error?.message || "请稍后重试"
+        });
+      }
     }
   }, [data, refreshState.status]);
+
+  useEffect(() => {
+    if (!shouldRefreshOnOpen(data.meta)) return undefined;
+    const timer = window.setTimeout(() => refreshMarketData({ reason: "open" }), 500);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (refreshState.status === "loading") return;
+      const key = dueScheduledRefreshKey();
+      if (!key) return;
+      try {
+        if (window.localStorage.getItem(key) === "1") return;
+        window.localStorage.setItem(key, "1");
+      } catch {
+        // localStorage may be unavailable in private windows; the refresh can still run.
+      }
+      refreshMarketData({ reason: "schedule" });
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [refreshMarketData, refreshState.status]);
 
   return { marketData: data, refreshState, refreshMarketData };
 }
@@ -343,6 +383,10 @@ function App() {
   const [activeLane, setActiveLane] = useState("");
   const [activeCandidate, setActiveCandidate] = useState(0);
   const [query, setQuery] = useState("");
+  const [actionNotice, setActionNotice] = useState(null);
+  const actionNoticeTimer = useRef(null);
+
+  useEffect(() => () => window.clearTimeout(actionNoticeTimer.current), []);
 
   const storedActiveBranch = branches.find((branch) => branch.id === activeBranchId) || branches[0];
   const queryText = query.trim().toLowerCase();
@@ -376,13 +420,27 @@ function App() {
     setActiveCandidate(0);
   }
 
+  function showActionNotice(message, detail) {
+    setActionNotice({ message, detail });
+    window.clearTimeout(actionNoticeTimer.current);
+    actionNoticeTimer.current = window.setTimeout(() => setActionNotice(null), 4200);
+  }
+
   return (
     <div className="app-shell">
       <Sidebar page={page} setPage={setPage} meta={marketData.meta} />
       <main className="workspace">
-        <Topbar query={query} setQuery={setQuery} meta={marketData.meta} refreshState={refreshState} onRefresh={refreshMarketData} />
+        <Topbar
+          query={query}
+          setQuery={setQuery}
+          marketData={marketData}
+          refreshState={refreshState}
+          onRefresh={refreshMarketData}
+          onNotice={showActionNotice}
+        />
         <MarketStrip indexes={marketData.indexes || []} branches={branches} meta={marketData.meta} topSectors={marketData.topSectors || []} />
         <RefreshFeedback state={refreshState} />
+        {actionNotice && <ActionNotice notice={actionNotice} />}
         <div className="page-tabs">
           {pages.map((item) => {
             const Icon = item.icon;
@@ -479,9 +537,46 @@ function Sidebar({ page, setPage, meta }) {
   );
 }
 
-function Topbar({ query, setQuery, meta, refreshState, onRefresh }) {
+function Topbar({ query, setQuery, marketData, refreshState, onRefresh, onNotice }) {
+  const meta = marketData.meta || {};
   const dataStatus = getDataStatus(meta);
   const loading = refreshState.status === "loading";
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  function downloadSnapshot() {
+    const content = JSON.stringify(marketData, null, 2);
+    const blob = new Blob([content], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const stamp = (meta.marketTime || new Date().toISOString()).replace(/[^\d]/g, "").slice(0, 12) || "snapshot";
+    link.href = url;
+    link.download = `flowtree-snapshot-${stamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    onNotice?.("已下载研究快照", `数据时间：${meta.marketTime || "待确认"}`);
+  }
+
+  async function enableReminder() {
+    if (!("Notification" in window)) {
+      onNotice?.("当前浏览器不支持提醒", "可以继续使用页面内自动更新提示。");
+      return;
+    }
+    const permission = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+    if (permission === "granted") {
+      showBrowserNotification("TranFu量化提醒已开启", `自动更新时间：${AUTO_REFRESH_LABEL}`);
+      onNotice?.("提醒已开启", AUTO_REFRESH_LABEL);
+    } else {
+      onNotice?.("提醒未开启", "浏览器没有授权通知权限。");
+    }
+  }
+
+  function showResearchMode(label) {
+    setMenuOpen(false);
+    onNotice?.(label, `当前数据时间：${meta.marketTime || "待确认"}`);
+  }
+
   return (
     <header className="topbar">
       <div>
@@ -497,18 +592,36 @@ function Topbar({ query, setQuery, meta, refreshState, onRefresh }) {
           <RefreshCw size={18} />
           <span>{loading ? `${refreshState.progress}%` : "刷新"}</span>
         </button>
-        <button title="导出当前页面">
+        <button onClick={downloadSnapshot} title="下载当前研究快照">
           <Download size={18} />
         </button>
-        <button title="提醒">
+        <button onClick={enableReminder} title="开启自动更新提醒">
           <Bell size={18} />
         </button>
-        <button className="user-chip">
-          研究员
-          <ChevronDown size={16} />
-        </button>
+        <div className="user-menu-wrap">
+          <button className="user-chip" onClick={() => setMenuOpen((open) => !open)} aria-expanded={menuOpen}>
+            研究员
+            <ChevronDown size={16} />
+          </button>
+          {menuOpen && (
+            <div className="user-menu">
+              <button onClick={() => showResearchMode("研究员模式已就绪")}>研究员模式</button>
+              <button onClick={() => showResearchMode(dataStatus.label)}>数据源状态</button>
+              <button onClick={() => showResearchMode("自动更新计划")}>刷新计划</button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
+  );
+}
+
+function ActionNotice({ notice }) {
+  return (
+    <section className="action-notice">
+      <strong>{notice.message}</strong>
+      <span>{notice.detail}</span>
+    </section>
   );
 }
 
