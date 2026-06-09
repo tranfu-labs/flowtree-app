@@ -12,8 +12,8 @@ const outputPath = new URL("../src/data/market-data.json", import.meta.url);
 const runtimeOutputPath = new URL("../public/market-data.json", import.meta.url);
 const execFileAsync = promisify(execFile);
 
-const EASTMONEY_LIST_API = "https://push2.eastmoney.com/api/qt/clist/get";
-const EASTMONEY_INDEX_API = "https://push2.eastmoney.com/api/qt/ulist.np/get";
+const EASTMONEY_LIST_API = "http://push2.eastmoney.com/api/qt/clist/get";
+const EASTMONEY_INDEX_API = "http://push2.eastmoney.com/api/qt/ulist.np/get";
 
 const sectorFields = [
   "f12",

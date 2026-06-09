@@ -310,7 +310,7 @@ function startScheduledRefresh() {
 
 async function proxyEastmoney(request, response, url) {
   const upstreamPath = url.pathname.replace(/^\/api\/eastmoney/, "/api");
-  const upstream = `https://push2.eastmoney.com${upstreamPath}${url.search}`;
+  const upstream = `http://push2.eastmoney.com${upstreamPath}${url.search}`;
   try {
     const upstreamResponse = await fetch(upstream, {
       headers: {
@@ -331,8 +331,10 @@ async function proxyEastmoney(request, response, url) {
 
 async function runMarketDataDiagnostics() {
   const startedAt = new Date().toISOString();
-  const listUrl = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&po=1&np=1&fltt=2&invt=2&fid=f62&fs=m:90+t:2&fields=f12,f14,f62";
-  const indexUrl = "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&fields=f12,f13,f14,f2,f3&secids=1.000001";
+  const listHttpUrl = "http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&po=1&np=1&fltt=2&invt=2&fid=f62&fs=m:90+t:2&fields=f12,f14,f62";
+  const listHttpsUrl = "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&po=1&np=1&fltt=2&invt=2&fid=f62&fs=m:90+t:2&fields=f12,f14,f62";
+  const indexHttpUrl = "http://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&fields=f12,f13,f14,f2,f3&secids=1.000001";
+  const indexHttpsUrl = "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2&fields=f12,f13,f14,f2,f3&secids=1.000001";
   const diagnostics = {
     startedAt,
     dnsOrder: "ipv4first",
@@ -346,7 +348,12 @@ async function runMarketDataDiagnostics() {
     diagnostics.dns = describeFetchError(error, "https://push2.eastmoney.com/");
   }
 
-  for (const [label, target] of [["sector-list", listUrl], ["index-list", indexUrl]]) {
+  for (const [label, target] of [
+    ["sector-list-http", listHttpUrl],
+    ["sector-list-https", listHttpsUrl],
+    ["index-list-http", indexHttpUrl],
+    ["index-list-https", indexHttpsUrl]
+  ]) {
     const checkStarted = Date.now();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
