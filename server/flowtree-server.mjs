@@ -13,7 +13,9 @@ const runtimeDataPath = resolve(process.env.FLOWTREE_MARKET_DATA_PATH || join(ap
 const refreshScriptPath = resolve(appRoot, "scripts", "fetch-market-data.mjs");
 const port = Number(process.env.FLOWTREE_PORT || 80);
 const scheduledRefreshMinutes = [575, 630, 690, 840, 910];
-const scheduledKeys = new Set();
+const scheduledRetryIntervalMs = Number(process.env.FLOWTREE_SCHEDULE_RETRY_INTERVAL_MS || 5 * 60 * 1000);
+const scheduleTickIntervalMs = Number(process.env.FLOWTREE_SCHEDULE_TICK_INTERVAL_MS || 30000);
+const scheduledAttempts = new Map();
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -219,23 +221,44 @@ function isTradingWeekday(weekday) {
   return !["Sat", "Sun"].includes(weekday);
 }
 
-function dueScheduledRefreshKey(now = new Date()) {
+function latestScheduledMinute(currentMinute) {
+  return scheduledRefreshMinutes.filter((minute) => currentMinute >= minute).pop() || 0;
+}
+
+function marketMinute(meta) {
+  const marketMinuteMatch = String(meta?.marketTime || "").match(/\s+(\d{2}):(\d{2})/);
+  if (!marketMinuteMatch) return 0;
+  return Number(marketMinuteMatch[1]) * 60 + Number(marketMinuteMatch[2]);
+}
+
+function isMarketDataBehindSchedule(meta, now = new Date()) {
+  const current = shanghaiParts(now);
+  if (!isTradingWeekday(current.weekday)) return false;
+  if (meta?.dataDate !== current.date) return true;
+  const expectedMinute = latestScheduledMinute(current.minutes);
+  if (!expectedMinute) return false;
+  return marketMinute(meta) < expectedMinute;
+}
+
+function pendingScheduledRefreshKey(now = new Date()) {
   const current = shanghaiParts(now);
   if (!isTradingWeekday(current.weekday)) return "";
-  const due = scheduledRefreshMinutes.find((minute) => current.minutes >= minute && current.minutes < minute + 5);
+  const due = latestScheduledMinute(current.minutes);
   return due ? `flowtree-server-refresh-${current.key}-${due}` : "";
 }
 
 function shouldRefreshOnStartup(meta, now = new Date()) {
-  const current = shanghaiParts(now);
-  if (!isTradingWeekday(current.weekday)) return false;
-  if (meta?.dataDate !== current.date) return true;
-  const expectedMinute = scheduledRefreshMinutes.filter((minute) => current.minutes >= minute).pop();
-  if (!expectedMinute) return false;
-  const marketMinuteMatch = String(meta?.marketTime || "").match(/\s+(\d{2}):(\d{2})/);
-  if (!marketMinuteMatch) return true;
-  const marketMinute = Number(marketMinuteMatch[1]) * 60 + Number(marketMinuteMatch[2]);
-  return marketMinute < expectedMinute;
+  return isMarketDataBehindSchedule(meta, now);
+}
+
+function shouldAttemptScheduledRefresh(now = new Date()) {
+  if (!isMarketDataBehindSchedule(marketData.meta, now)) return false;
+  const key = pendingScheduledRefreshKey(now);
+  if (!key) return true;
+  const lastAttemptAt = scheduledAttempts.get(key) || 0;
+  if (Date.now() - lastAttemptAt < scheduledRetryIntervalMs) return false;
+  scheduledAttempts.set(key, Date.now());
+  return true;
 }
 
 function startScheduledRefresh() {
@@ -246,11 +269,9 @@ function startScheduledRefresh() {
   }
 
   setInterval(() => {
-    const key = dueScheduledRefreshKey();
-    if (!key || scheduledKeys.has(key)) return;
-    scheduledKeys.add(key);
+    if (!shouldAttemptScheduledRefresh()) return;
     refreshGlobalMarketData("schedule").catch((error) => console.warn(error));
-  }, 30000);
+  }, scheduleTickIntervalMs);
 }
 
 async function proxyEastmoney(request, response, url) {
