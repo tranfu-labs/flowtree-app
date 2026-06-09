@@ -11,7 +11,7 @@ const distDir = resolve(process.env.FLOWTREE_DIST_DIR || join(appRoot, "dist"));
 const bundledDataPath = resolve(appRoot, "public", "market-data.json");
 const runtimeDataPath = resolve(process.env.FLOWTREE_MARKET_DATA_PATH || join(appRoot, "data", "market-data.json"));
 const refreshScriptPath = resolve(appRoot, "scripts", "fetch-market-data.mjs");
-const port = Number(process.env.PORT || 80);
+const port = Number(process.env.FLOWTREE_PORT || 80);
 const scheduledRefreshMinutes = [575, 630, 690, 840, 910];
 const scheduledKeys = new Set();
 

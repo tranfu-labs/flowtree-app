@@ -114,7 +114,7 @@ npm run preview
 模拟正式服务：
 
 ```bash
-PORT=4173 npm run serve
+FLOWTREE_PORT=4173 npm run serve
 ```
 
 访问：
