@@ -2,6 +2,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { setDefaultResultOrder } from "node:dns";
 import { dirname } from "node:path";
+import http from "node:http";
+import https from "node:https";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -360,20 +362,9 @@ function formatDateTime(timestampSeconds) {
 async function fetchJson(url) {
   let lastError;
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Number(process.env.EASTMONEY_TIMEOUT_MS || 20000));
     try {
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-          Referer: "https://data.eastmoney.com/"
-        }
-      });
-      if (!response.ok) {
-        throw new Error(`Request failed ${response.status}: ${url}`);
-      }
-      const data = await response.json();
+      const text = await requestText(url);
+      const data = JSON.parse(text);
       if (data.rc !== 0) {
         throw new Error(`Eastmoney returned rc=${data.rc}: ${url}`);
       }
@@ -381,11 +372,40 @@ async function fetchJson(url) {
     } catch (error) {
       lastError = new Error(describeRequestError(error, url));
       await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
-    } finally {
-      clearTimeout(timeout);
     }
   }
   throw lastError;
+}
+
+function requestText(url) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const client = parsed.protocol === "http:" ? http : https;
+    const request = client.request(parsed, {
+      method: "GET",
+      timeout: Number(process.env.EASTMONEY_TIMEOUT_MS || 20000),
+      headers: {
+        Connection: "close",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        Referer: "https://data.eastmoney.com/"
+      }
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        if ((response.statusCode || 0) < 200 || (response.statusCode || 0) >= 300) {
+          reject(new Error(`Request failed ${response.statusCode}: ${text.slice(0, 160)}`));
+          return;
+        }
+        resolve(text);
+      });
+    });
+
+    request.on("timeout", () => request.destroy(new Error("Request timed out")));
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 function describeRequestError(error, url) {

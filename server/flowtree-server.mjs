@@ -4,6 +4,8 @@ import { lookup } from "node:dns/promises";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import http from "node:http";
+import https from "node:https";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -146,6 +148,35 @@ function describeFetchError(error, url) {
   if (cause?.port) details.port = cause.port;
   if (cause?.syscall) details.syscall = cause.syscall;
   return details;
+}
+
+function requestUpstreamText(url) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const client = parsed.protocol === "http:" ? http : https;
+    const request = client.request(parsed, {
+      method: "GET",
+      timeout: 12000,
+      headers: {
+        Connection: "close",
+        Referer: "https://data.eastmoney.com/",
+        "User-Agent": "Mozilla/5.0"
+      }
+    }, (upstreamResponse) => {
+      const chunks = [];
+      upstreamResponse.on("data", (chunk) => chunks.push(chunk));
+      upstreamResponse.on("end", () => {
+        resolve({
+          status: upstreamResponse.statusCode || 0,
+          contentType: upstreamResponse.headers["content-type"] || "",
+          text: Buffer.concat(chunks).toString("utf8")
+        });
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("Request timed out")));
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 function runRefreshScript() {
@@ -312,18 +343,12 @@ async function proxyEastmoney(request, response, url) {
   const upstreamPath = url.pathname.replace(/^\/api\/eastmoney/, "/api");
   const upstream = `http://push2.eastmoney.com${upstreamPath}${url.search}`;
   try {
-    const upstreamResponse = await fetch(upstream, {
-      headers: {
-        Referer: "https://data.eastmoney.com/",
-        "User-Agent": "Mozilla/5.0"
-      }
-    });
-    const body = await upstreamResponse.arrayBuffer();
+    const upstreamResponse = await requestUpstreamText(upstream);
     response.writeHead(upstreamResponse.status, {
-      "Content-Type": upstreamResponse.headers.get("content-type") || "application/json; charset=utf-8",
+      "Content-Type": upstreamResponse.contentType || "application/json; charset=utf-8",
       "Cache-Control": "no-store"
     });
-    response.end(Buffer.from(body));
+    response.end(upstreamResponse.text);
   } catch (error) {
     sendJson(response, describeFetchError(error, upstream), 502);
   }
@@ -349,10 +374,10 @@ async function runMarketDataDiagnostics() {
   }
 
   for (const [label, target] of [
-    ["sector-list-http", listHttpUrl],
-    ["sector-list-https", listHttpsUrl],
-    ["index-list-http", indexHttpUrl],
-    ["index-list-https", indexHttpsUrl]
+    ["fetch-sector-list-http", listHttpUrl],
+    ["fetch-sector-list-https", listHttpsUrl],
+    ["fetch-index-list-http", indexHttpUrl],
+    ["fetch-index-list-https", indexHttpsUrl]
   ]) {
     const checkStarted = Date.now();
     const controller = new AbortController();
@@ -384,6 +409,31 @@ async function runMarketDataDiagnostics() {
       });
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  for (const [label, target] of [
+    ["core-sector-list-http", listHttpUrl],
+    ["core-index-list-http", indexHttpUrl]
+  ]) {
+    const checkStarted = Date.now();
+    try {
+      const result = await requestUpstreamText(target);
+      diagnostics.checks.push({
+        label,
+        ok: result.status >= 200 && result.status < 300,
+        status: result.status,
+        contentType: result.contentType,
+        durationMs: Date.now() - checkStarted,
+        sample: result.text.slice(0, 180)
+      });
+    } catch (error) {
+      diagnostics.checks.push({
+        label,
+        ok: false,
+        durationMs: Date.now() - checkStarted,
+        error: describeFetchError(error, target)
+      });
     }
   }
 
