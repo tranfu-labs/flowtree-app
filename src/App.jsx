@@ -211,6 +211,11 @@ function formatSignedPercent(value) {
   return `${numeric > 0 ? "+" : ""}${numeric.toFixed(2)}%`;
 }
 
+function compactSvgLabel(value, maxLength = 9) {
+  const chars = Array.from(String(value || ""));
+  return chars.length > maxLength ? `${chars.slice(0, maxLength).join("")}…` : chars.join("");
+}
+
 function formatAmount(value) {
   const numeric = Number(value) || 0;
   return numeric.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -967,8 +972,10 @@ function PolicyLadder({ branches, activeBranch, onSelectBranch }) {
 function FlowTree({ branches, activeBranch, totalFlow, onSelectBranch, onSelectLane }) {
   const firstColumnX = 420;
   const secondColumnX = 760;
-  const branchStartY = 310;
-  const branchGap = 78;
+  const laneValueX = 1024;
+  const branchStartY = 332;
+  const branchGap = 92;
+  const laneGap = 24;
   return (
     <div className="flow-tree">
       <svg viewBox="0 0 1080 640" role="img" aria-label="资金流树">
@@ -1007,14 +1014,16 @@ function FlowTree({ branches, activeBranch, totalFlow, onSelectBranch, onSelectL
               <text x={firstColumnX + 38} y={y - 5} className="branch-name">{branch.name}</text>
               <text x={firstColumnX + 38} y={y + 22} className={branch.flow < 0 ? "branch-flow down" : "branch-flow"}>{formatFlow(branch.flow)}</text>
               {branch.lanes.slice(0, 4).map((lane, laneIndex) => {
-                const laneY = y + (laneIndex - 1.5) * 27;
+                const laneY = y + (laneIndex - 1.5) * laneGap;
                 const laneStroke = lane.flow < 0 ? "#f26b6b" : stroke;
+                const laneLabel = compactSvgLabel(lane.name, 9);
                 return (
                   <g key={lane.name} className="lane-group" onClick={(event) => {
                     event.stopPropagation();
                     onSelectBranch(branch.id);
                     onSelectLane(lane.name);
                   }}>
+                    <title>{`${lane.name} ${formatFlow(lane.flow)}`}</title>
                     <path
                       d={`M ${firstColumnX + 25} ${y} C ${firstColumnX + 110} ${y}, ${secondColumnX - 130} ${laneY}, ${secondColumnX - 18} ${laneY}`}
                       stroke={laneStroke}
@@ -1022,8 +1031,8 @@ function FlowTree({ branches, activeBranch, totalFlow, onSelectBranch, onSelectL
                       className="lane-line"
                     />
                     <circle cx={secondColumnX - 16} cy={laneY} r="5" fill={laneStroke} />
-                    <text x={secondColumnX + 6} y={laneY + 5} className="lane-name">{lane.name}</text>
-                    <text x={secondColumnX + 150} y={laneY + 5} className={lane.flow < 0 ? "lane-flow down" : "lane-flow"}>{formatFlow(lane.flow)}</text>
+                    <text x={secondColumnX + 6} y={laneY + 5} className="lane-name">{laneLabel}</text>
+                    <text x={laneValueX} y={laneY + 5} textAnchor="end" className={lane.flow < 0 ? "lane-flow down" : "lane-flow"}>{formatFlow(lane.flow)}</text>
                   </g>
                 );
               })}
